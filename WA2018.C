@@ -321,13 +321,6 @@ void WA2018<BasicTurbulenceModel>::correct()
     // Push any changed cell values to coupled neighbours
     // Rwa_.boundaryFieldRef().template evaluateCoupled<coupledFvPatch>();
 
-    // DIAGNOSTIC: Print field statistics BEFORE solving
-    Info << nl << "=== WA2018 correct() START ===" << nl;
-    Info << "Rwa   min/max: " << gMin(Rwa_) << " / " << gMax(Rwa_) << endl;
-    Info << "k     min/max: " << gMin(k_) << " / " << gMax(k_) << endl;
-    Info << "omega min/max: " << gMin(omega_) << " / " << gMax(omega_) << endl;
-    Info << "nut   min/max: " << gMin(this->nut_) << " / " << gMax(this->nut_) << endl;
-
     // R equation
     // Note for last term (i.e term before fvOptions) in the eqn -  
     // grad(R or S) gives vector, so you do magSqr to make it compatible with Cm and sqr(magS)
@@ -356,14 +349,6 @@ void WA2018<BasicTurbulenceModel>::correct()
 
     // Update turbulent viscosity
     correctNut();
-
-    // DIAGNOSTIC: Print AFTER solving
-    Info << nl << "=== AFTER SOLVING ===" << nl;
-    Info << "Rwa   min/max: " << gMin(Rwa_) << " / " << gMax(Rwa_) << endl;
-    Info << "k     min/max: " << gMin(k_) << " / " << gMax(k_) << endl;
-    Info << "omega min/max: " << gMin(omega_) << " / " << gMax(omega_) << endl;
-    Info << "nut   min/max: " << gMin(this->nut_) << " / " << gMax(this->nut_) << endl;
-    Info << "=== WA2018 correct() END ===" << nl << endl;
 
     //! Should f1, C1, sigmaR, S also be cleared at the end?
 }
