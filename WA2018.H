@@ -119,10 +119,9 @@ protected:
             dimensionedScalar Cm_;
             
         // Fields
-
-            volScalarField k_;
-            volScalarField omega_;
-            volScalarField Rwa_; // Rwa_ => R Wray-Aggarwal, corresponds to R in the model
+            // Note - R() is an openfoam reserved function that calcs reynolds stress
+            // Rwa_ => R Wray-Aggarwal, corresponds to R in the model
+            volScalarField Rwa_; 
 
 
 
@@ -130,13 +129,24 @@ protected:
 
         virtual void correctNut();
 
-        //! For some reason, including this func in the fvMatrix RwaEqn casused an unknown symbol error at runtime
+        //* For some reason, including this func in the fvMatrix RwaEqn casused an unknown symbol error at runtime
         // virtual tmp<fvScalarMatrix> RwaSource() const;
 
-        // Coressponds to f_{1} param
-        // arg1IP => arg1 input
-        tmp<volScalarField> F1WA();
+        tmp<volScalarField> WA_omega
+        (
+            const volScalarField& magS
+        );
+        tmp<volScalarField> WA_k
+        (
+            const volScalarField& omega 
+        );
 
+        tmp<volScalarField> F1WA
+        (
+            const volScalarField& magS,
+            const volScalarField& magW
+        );
+        
         tmp<volScalarField> arg1();
 
         tmp<volScalarField> C1
@@ -185,31 +195,27 @@ public:
         //- Re-read model coefficients if they have changed
         virtual bool read();
 
-        // - Return R value 
-        // I use R_wa , since apparently R() is an openfoam reserved function that calcs reynolds stress
-        // This function is not used in field calculation anymore (1-03-26)
-        tmp<volScalarField> R_wa() const
+        //- Return the turbulence kinetic energy
+        //? Even though we don't use this, we need to keep this definition here.
+        //? Reason - We inherit from eddy viscosity base class. That class has a pure virtual def
+        //? for k, and so we need to init it in our turbulence model, else that k function can't
+        //? be instantiated during runtime, and we get a compile error
+        virtual tmp<volScalarField> k() const
         {
             return tmp<volScalarField>
             (
                 new volScalarField
                 (
-                    "R",
-                    (k_ / omega_) 
+                    IOobject
+                    (
+                        "k",
+                        this->runTime_.timeName(),
+                        this->mesh_
+                    ),
+                    this->mesh_,
+                    dimensionedScalar("0", dimensionSet(0, 2, -2, 0, 0), 0)
                 )
             );
-        }
-
-        //- Return the turbulence kinetic energy
-        virtual tmp<volScalarField> k() const
-        {
-            return k_;
-        }
-
-        //- Return the turbulence kinetic energy dissipation rate
-        virtual tmp<volScalarField> omega() const
-        {
-            return omega_;
         }
 
         //- Solve the turbulence equations and correct the turbulence viscosity

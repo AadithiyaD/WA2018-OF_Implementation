@@ -44,15 +44,34 @@ namespace RASModels
 template<class BasicTurbulenceModel>
 void WA2018<BasicTurbulenceModel>::correctNut()
 {
-
     // Calc and init chi and fmu
     volScalarField chi(Rwa_/this->nu());
 
     // fmu is the damping function accounting for wall blocking
-    volScalarField fmu(pow3(chi)/( pow3(chi) + pow3(Cm_) ) );
+    volScalarField fmu(pow3(chi)/( pow3(chi) + pow3(Cw_) ) );
+    Info << "fmu min/max/avg: " 
+     << gMin(fmu) << " / " 
+     << gMax(fmu) << " / " 
+     << gAverage(fmu) << endl;
+    
+    // fmu.rename("fmu_diagnostic");
+    // fmu.write();
 
-    // Calculate turbulent viscosity
-    this->nut_ = this->rho_*fmu*Rwa_;
+    volScalarField fmu_diags
+    (
+    IOobject
+    (
+        "fmu_diags",
+        this->runTime_.timeName(),
+        this->mesh_,
+        IOobject::NO_READ,
+        IOobject::AUTO_WRITE  // Writes at writeInterval
+    ),
+    pow3(chi)/(pow3(chi) + pow3(Cw_))
+    );
+
+    // Calculate damped turbulent viscosity
+    this->nut_ = fmu*Rwa_;
     this->nut_.correctBoundaryConditions();
     fv::options::New(this->mesh_).correct(this->nut_);
 
@@ -80,33 +99,48 @@ tmp<volScalarField> WA2018<BasicTurbulenceModel>::C1
 }
 
 template<class BasicTurbulenceModel>
-tmp<volScalarField> WA2018<BasicTurbulenceModel>::F1WA()
+tmp<volScalarField> WA2018<BasicTurbulenceModel>::F1WA
+(
+    const volScalarField& magS,
+    const volScalarField& magW
+)
 {
-    //! Would it be better if i put all of these as refs instead of direct init? Would that be faster / more memory efficient?
-    // First calculate eta
-    // Calculate grad U and get S
-    tmp<volTensorField> tgradU = fvc::grad(this->U_);
-
-    // We now get the variable magS, which represents S from the model
-    volScalarField S2(2*magSqr(devSymm(tgradU())));
-
-    //* using max (to avoid div by 0 errors) led to some issues at runtime
-    //* Therefore, use bound instead of max
-    volScalarField magS(sqrt(S2)); 
-    bound(magS, dimensionedScalar("0", magS.dimensions(), SMALL));
-
-    // Similarly, calculate W, which is the antisymmetric part of the velocity grad
-    volScalarField W2(2*magSqr(skew(tgradU())));
-    volScalarField magW(sqrt(W2));
-
-    // Now we can calculate eta
+    // calculate eta
     volScalarField eta(magS * max(scalar(1), magW/magS));
     
     // Calculate arg1 
-    volScalarField arg1( ((this->nu() + Rwa_)/2) * ((sqr(eta))/(Cmu_*k_*omega_) ) );
+    volScalarField omega = WA_omega(magS);
+    volScalarField k = WA_k(omega);
+    volScalarField arg1( ((this->nu() + Rwa_)/2) * ((sqr(eta))/max(Cmu_*k*omega,dimensionedScalar("SMALL", 
+                                                                    dimensionSet(0, 2, -3, 0, 0), 
+                                                                    SMALL)
+                                                                     ) ) );
+    // k.rename("k_diagnostic");
+    // k.write();
 
+    // omega.rename("omega_diagnostic");
+    // omega.write();
+    
     // return tanh(arg1^4)
     return tanh(pow4(arg1));
+}
+
+template<class BasicTurbulenceModel>
+tmp<volScalarField> WA2018<BasicTurbulenceModel>::WA_k
+(
+    const volScalarField& omega
+)
+{
+    return this->nut_*omega;
+}
+
+template<class BasicTurbulenceModel>
+tmp<volScalarField> WA2018<BasicTurbulenceModel>::WA_omega
+(
+    const volScalarField& magS
+)
+{    
+    return magS/sqrt(Cmu_);
 }
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -202,30 +236,6 @@ WA2018<BasicTurbulenceModel>::WA2018
         )
     ),
 
-    k_
-    (
-        IOobject
-        (
-            IOobject::groupName("k", alphaRhoPhi.group()),
-            this->runTime_.timeName(),
-            this->mesh_,
-            IOobject::MUST_READ,
-            IOobject::AUTO_WRITE
-        ),
-        this->mesh_
-    ),
-    omega_
-    (
-        IOobject
-        (
-            IOobject::groupName("omega", alphaRhoPhi.group()),
-            this->runTime_.timeName(),
-            this->mesh_,
-            IOobject::MUST_READ,
-            IOobject::AUTO_WRITE
-        ),
-        this->mesh_
-    ),
     Rwa_
     (
         IOobject
@@ -239,9 +249,6 @@ WA2018<BasicTurbulenceModel>::WA2018
         this->mesh_
     )
 {
-    bound(k_, this->kMin_);
-    bound(omega_, this->omegaMin_);
-
     // kMin and omegaMin are defined in RASModel.H . So if I wanted to do similar for R, would
     // I have to modify that file?
     bound(Rwa_, dimensionedScalar("small", Rwa_.dimensions(), SMALL));
@@ -290,7 +297,7 @@ void WA2018<BasicTurbulenceModel>::correct()
     const rhoField& rho = this->rho_;
     const surfaceScalarField& alphaRhoPhi = this->alphaRhoPhi_;
     const volVectorField& U = this->U_;
-    // const volScalarField& nut = this->nut_; //! WTF if nut is not used in the eqn then what is its point?
+    // const volScalarField& nut = this->nut_;
 
     fv::options& fvOptions(fv::options::New(this->mesh_));
 
@@ -299,23 +306,29 @@ void WA2018<BasicTurbulenceModel>::correct()
     // Create a tmp gradU object
     tmp<volTensorField> tgradU = fvc::grad(U);
 
-    //! Can all of these be refs or tmp objects to be more memory efficient ?
-    // Calc f1, sigmaR,and C1
-    volScalarField f1Var = F1WA();
-    volScalarField C1Var = C1(f1Var);
-    volScalarField sigmaRVar = sigmaR(f1Var);
+    //? We first calc the variable magS, which represents S from the model
+    //? Take max() to avoid div by zero errors
+    // QUESTION - Should this be devSymm or symm ? 
+    volScalarField S2(2*magSqr(symm(tgradU())));
+    volScalarField magS(sqrt(S2)); 
+    S2 = max(S2, dimensionedScalar("0", S2.dimensions(), SMALL));
+    magS = max(magS, dimensionedScalar("0", magS.dimensions(), SMALL));
 
-    // Calc S (Remember, magS => S)
-    volScalarField S2(2*magSqr(devSymm(tgradU()))); 
-    volScalarField magS(max(sqrt(S2), dimensionedScalar("small", dimensionSet(0, 0, -1, 0, 0), SMALL)));
-    // volScalarField magS(sqrt(S2)); 
-    // bound(magS, dimensionedScalar("0", magS.dimensions(), SMALL));
+    //? Similarly, calculate W, which is the antisymmetric part of the velocity gradient
+    volScalarField W2(2*magSqr(skew(tgradU())));
+    volScalarField magW(sqrt(W2));
 
     // Clear tgradu since not needed after this point
-    //! Can tgradU be safely cleared here?
-    // tgradU.clear();
+    tgradU.clear();
 
-    //! Does R need to be updated at the wall? 
+    //TODO- Can all of these be refs or tmp objects to be more memory efficient ?
+    // Calc f1, sigmaR,and C1
+    volScalarField f1 = F1WA(magS, magW);
+    volScalarField C1Var = C1(f1);
+    volScalarField sigmaRVar = sigmaR(f1);
+
+    //TODO- Does R need to be updated at the wall? 
+    // TODO - Idts since R is set to 0 at walls
     // Update R at the wall
     // Rwa_.boundaryFieldRef().updateCoeffs();
     // Push any changed cell values to coupled neighbours
@@ -323,34 +336,37 @@ void WA2018<BasicTurbulenceModel>::correct()
 
     // R equation
     // Note for last term (i.e term before fvOptions) in the eqn -  
-    // grad(R or S) gives vector, so you do magSqr to make it compatible with Cm and sqr(magS)
+    // grad(R or S) gives vector, so you do magSqr to make it compatible with Cm and S2
     tmp<fvScalarMatrix> RwaEqn
     (
           fvm::ddt(Rwa_)
         + fvm::div(alphaRhoPhi, Rwa_)
         - fvm::laplacian((sigmaRVar*Rwa_) + this->nu(), Rwa_)
         ==
-        (C1Var*Rwa_*magS)
-        + (f1Var* C2kOmega_*fvm::Sp((fvc::grad(Rwa_) & fvc::grad(magS))/magS,Rwa_) )
-        - (1-f1Var)* min(C2kEps_*sqr(Rwa_)*((magSqr(fvc::grad(magS))/sqr(magS))), Cm_*magSqr(fvc::grad(Rwa_)) ) 
+          C1Var*fvm::Sp(magS, Rwa_)
+        + fvm::Sp(((f1* C2kOmega_)/magS)*(fvc::grad(Rwa_) & fvc::grad(magS)),Rwa_)
+        - min(C2kEps_*(Rwa_*Rwa_)*((magSqr(fvc::grad(magS))/S2)),
+                                         Cm_*magSqr(fvc::grad(Rwa_)))
         + fvOptions(alpha, rho, Rwa_)
     );
 
     RwaEqn.ref().relax();
     fvOptions.constrain(RwaEqn.ref());
 
-    //! R is not specified at the boundary, so is this necesary?
-    // RwaEqn.ref().boundaryManipulate(epsilon_.boundaryFieldRef());
+    //! What does this line do anyway?
+    // RwaEqn.ref().boundaryManipulate(Rwa_.boundaryFieldRef());
+    // Info << "This is printed after the test1 line change" << endl;
     
     solve(RwaEqn);
     fvOptions.correct(Rwa_);
-    bound(Rwa_, dimensionedScalar("small", Rwa_.dimensions(), SMALL));
+    // bound(Rwa_, dimensionedScalar("small", Rwa_.dimensions(), SMALL));
+    bound(Rwa_, dimensionedScalar(Rwa_.dimensions(), Zero));
     Rwa_.correctBoundaryConditions();
 
     // Update turbulent viscosity
     correctNut();
 
-    //! Should f1, C1, sigmaR, S also be cleared at the end?
+    //TODO- Should f1, C1, sigmaR, S also be cleared at the end?
 }
 
 
