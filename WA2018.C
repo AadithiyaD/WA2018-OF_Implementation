@@ -320,7 +320,6 @@ void WA2018<BasicTurbulenceModel>::correct()
     solve(RwaEqn);
     fvOptions.correct(Rwa_);
     bound(Rwa_, dimensionedScalar("small", Rwa_.dimensions(), SMALL));
-    // bound(Rwa_, dimensionedScalar(Rwa_.dimensions(), Zero));
     Rwa_.correctBoundaryConditions();
 
     // Update turbulent viscosity
